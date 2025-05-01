@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -43,16 +45,47 @@ func basicAuth(handler http.HandlerFunc, username, password string) http.Handler
 	}
 }
 
+type Config struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+func GetConfig() (*Config, error) {
+	homedir, err := os.UserHomeDir();
+	if err != nil {
+		return nil, err
+	}
+
+	configFile, err := os.Open(filepath.Join(homedir, ".config", "milow-server-credentials.json"))
+	if err != nil {
+		return nil, err
+	}
+
+	defer configFile.Close()
+
+	byteValue, err := io.ReadAll(configFile)
+
+	var result Config
+	err = json.Unmarshal(byteValue, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	return &result, nil
+}
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	username := "max"
-	password := "wdghkla123"
+	cfg, err := GetConfig()
+	if err != nil {
+		log.Fatalf("error getting config: %v", err)
+	}
 
 	http.HandleFunc("/", basicAuth(func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, "index.html")
-	}, username, password))
+	}, cfg.Username, cfg.Password))
 
 	http.HandleFunc("/offer", func(w http.ResponseWriter, r *http.Request) {
 		var offer webrtc.SessionDescription
@@ -138,8 +171,8 @@ func streamFromCamera(ctx context.Context) {
 	}()
 
 	cmd := exec.Command("bash", "-c", `
-libcamera-vid --codec yuv420 --width 640 --height 480 --framerate 25 --timeout 0 --nopreview -o - |
-ffmpeg -f rawvideo -pixel_format yuv420p -video_size 640x480 -framerate 25 -i - \
+libcamera-vid --codec yuv420 --width 1920 --height 1080 --framerate 25 --bitrate 4000000 --timeout 0 --nopreview -o - |
+ffmpeg -f rawvideo -pixel_format yuv420p -video_size 1920x1080 -framerate 25 -i - \
 -an -c:v libx264 -preset ultrafast -tune zerolatency -f rtp rtp://127.0.0.1:5004
 `)
 	cmd.Stderr = log.Writer()
